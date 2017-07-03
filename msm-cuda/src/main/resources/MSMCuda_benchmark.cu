@@ -30,6 +30,10 @@ __device__ double euclidean(double *p1, double *p2);
 
 __global__ void msm(double* trajA, int lengthA, double* trajB, int lengthB, double* aScore, double* bScore, double* semanticsDescriptors);
 
+void msm_sequential(double* trajA, int lengthA, double* trajB, int lengthB, double* aScore, double* bScore, double* semanticsDescriptors);
+
+double euclidean_local(double *p1, double *p2);
+
 trajetoria** trajetorias;
 
 trajetoria* readTrajFile(char*);
@@ -37,6 +41,7 @@ trajetoria* readTrajFile(char*);
 double* trajectoryRawer(trajetoria*);
 
 double distance(double*, int, double*, int);
+double distance_sequential(double*, int, double*, int);
 
 int main(int argc, char *argv[]) {
 	int file_count = 0;
@@ -83,21 +88,64 @@ int main(int argc, char *argv[]) {
 		allDistances[k] = (double*) malloc(file_count*sizeof(double));
 	}
 	printf("Trajetorias transformadas %d\n", file_count);
+	
+	struct timeval begin, end;
+	
+	printf("Executando algoritmo sequencial\n");
+	gettimeofday(&begin, NULL);
 	for(int k = 0;k<file_count;k++) {
 		allDistances[k][k] = 0.0;
 		for(int l = 0;l<file_count;l++) {
-	//printf("Distance lengthA=%d, lengthB=%d\n", trajetorias[k]->qntdPontos, trajetorias[l]->qntdPontos);
+			if(k<l) {
+				double *trajA = rawTrajs[k];
+				double *trajB = rawTrajs[l];
+				double similarity = distance_sequential(trajA, trajetorias[k]->qntdPontos, trajB, trajetorias[l]->qntdPontos);
+				allDistances[k][l] = similarity;
+				allDistances[l][k] = similarity;
+			}
+		}
+	}
+	gettimeofday(&end, NULL);
+    float cpuTime = 1000000*(float)(end.tv_sec - begin.tv_sec);
+    cpuTime +=  (float)(end.tv_usec - begin.tv_usec);
+
+	printf("Tempo de execução para a construção da matriz de similaridade entre todas as trajetórias: %9.2f microssegundos\n", cpuTime);
+	/*
+	printf("Dados das tabelas de similaridade\nCPU:\n");
+	for(int i = 0; i < file_count;i++) {
+		for(int j = 0; j < file_count;j++) {
+			printf("%.2f, ", allDistances[i][j]);
+		}
+		printf("\n");
+	}*/
+	printf("Executando algoritmo acelerado por GPU\n");
+	gettimeofday(&begin, NULL);
+	for(int k = 0;k<file_count;k++) {
+		allDistances[k][k] = 0.0;
+		for(int l = 0;l<file_count;l++) {
 			if(k<l) {
 				double *trajA = rawTrajs[k];
 				double *trajB = rawTrajs[l];
 				double similarity = distance(trajA, trajetorias[k]->qntdPontos, trajB, trajetorias[l]->qntdPontos);
 				allDistances[k][l] = similarity;
 				allDistances[l][k] = similarity;
-				//printf("Similaridade das trajetórias: %.2f\n", similarity);
 			}
 		}
 	}
+	gettimeofday(&end, NULL);
+    float gpuTime = 1000000*(float)(end.tv_sec - begin.tv_sec);
+    gpuTime +=  (float)(end.tv_usec - begin.tv_usec);
 
+	printf("Tempo de execução para a construção da matriz de similaridade entre todas as trajetórias: %9.2f microssegundos\n", gpuTime);
+	/*
+	printf("GPU:\n");
+	for(int i = 0; i < file_count;i++) {
+		for(int j = 0; j < file_count;j++) {
+			printf("%.2f, ", allDistances[i][j]);
+		}
+		printf("\n");
+	}*/
+	
 	for(int i = 0; i < file_count;i++) {
 		if(trajetorias[i]) {
 			for(int j = 0; j < trajetorias[i]->qntdPontos;j++) {
@@ -109,73 +157,6 @@ int main(int argc, char *argv[]) {
 	free(trajetorias);
 	
 	return 0;
-}
-
-double distance(double* trajA, int N, double* trajB, int M) {
-	double* aScore = (double*)malloc( N*sizeof(double));
-	double* bScore = (double*)malloc( N*M*sizeof(double));
-	double* semanticsDescriptors = (double*)malloc( 2*2*sizeof(double));
-	//GEO
-	semanticsDescriptors[0] = 0.0;
-	semanticsDescriptors[1] = 0.5;
-	//TIME
-	semanticsDescriptors[2] = 0.0;
-	semanticsDescriptors[3] = 0.5;
-
-	//printf("Distance lengthA=%d, lengthB=%d\n", N,M);
-    
-	double *d_trajA,*d_trajB, *d_aScore, *d_bScore, *d_semanticsDescriptors;
-	cudaMalloc( (void**) &d_trajA, 4*N*sizeof(double) );
-	cudaMalloc( (void**) &d_trajB, 4*M*sizeof(double) ); 
-
-	cudaMalloc( (void**) &d_semanticsDescriptors, 2*2*sizeof(double) );
-	cudaMalloc( (void**) &d_aScore, N*sizeof(double) );
-	cudaMalloc( (void**) &d_bScore, N*M*sizeof(double) );
-	cudaMemcpy( (void*) d_trajA, (void*) trajA, 4*N*sizeof(double), cudaMemcpyHostToDevice);
-	cudaMemcpy( (void*) d_trajB, (void*) trajB, 4*M*sizeof(double), cudaMemcpyHostToDevice); 
-	cudaMemcpy( (void*) d_semanticsDescriptors, (void*) semanticsDescriptors, 2*2*sizeof(double), cudaMemcpyHostToDevice); 
-	
-	int THREADS = 512;
-	int BLOCOS = (N/THREADS) + 1;
-	
-    struct timeval begin, end;
-    gettimeofday(&begin, NULL);
-    msm<<<BLOCOS, THREADS>>>( d_trajA, N, d_trajB, M, d_aScore, d_bScore, d_semanticsDescriptors );
-    gettimeofday(&end, NULL);
-    
-	cudaMemcpy( (void*) aScore, (void*) d_aScore, N*sizeof(double), cudaMemcpyDeviceToHost);
-	cudaMemcpy( (void*) bScore, (void*) d_bScore, N*M*sizeof(double), cudaMemcpyDeviceToHost);
-	
-	cudaFree(d_trajA); 
-	cudaFree(d_trajB); 
-	cudaFree(d_aScore);
-	cudaFree(d_bScore);
-	cudaFree(d_semanticsDescriptors); 
-    
-	double parityAB = 0.0;
-	for (int i = 0; i < N; i++) {
-		parityAB += aScore[i];
-	}
-
-	double parityBA = 0.0;
-	for (int i = 0; i < N; i++) {
-		double maxScore = 0.0;
-		for (int j = 0; j < M; j++) {
-			maxScore = MAX(maxScore, bScore[i * M + j]);
-		}
-		parityBA += maxScore;
-	}
-	//printf("parityAB=%.2f, parityBA=%.2f\n", parityAB, parityBA );
-	double similarity = (parityAB + parityBA) / (N + M);
-	free(semanticsDescriptors);
-	//printf("similarity=%.2f\n", similarity );
-	free(bScore);
-	free(aScore);
-	aScore = NULL;
-	bScore = NULL;
-	semanticsDescriptors = NULL;
-	
-	return similarity;
 }
 
 trajetoria* readTrajFile(char *filePath) {
@@ -274,6 +255,150 @@ double* trajectoryRawer(trajetoria* trajetoria) {
 	return trajA;
 }
 
+double distance_sequential(double* trajA, int N, double* trajB, int M) {
+	double* aScore = (double*)malloc( N*sizeof(double));
+	double* bScore = (double*)malloc( N*M*sizeof(double));
+	double* semanticsDescriptors = (double*)malloc( 2*2*sizeof(double));
+	//GEO
+	semanticsDescriptors[0] = 0.0;
+	semanticsDescriptors[1] = 0.5;
+	//TIME
+	semanticsDescriptors[2] = 0.0;
+	semanticsDescriptors[3] = 0.5;
+
+	//printf("Distance lengthA=%d, lengthB=%d\n", N,M);
+    msm_sequential( trajA, N, trajB, M, aScore, bScore, semanticsDescriptors );
+    
+	double parityAB = 0.0;
+	for (int i = 0; i < N; i++) {
+		parityAB += aScore[i];
+	}
+
+	double parityBA = 0.0;
+	for (int i = 0; i < N; i++) {
+		double maxScore = 0.0;
+		for (int j = 0; j < M; j++) {
+			maxScore = MAX(maxScore, bScore[i * M + j]);
+		}
+		parityBA += maxScore;
+	}
+	double similarity = (parityAB + parityBA) / (N + M);
+	free(semanticsDescriptors);
+	//printf("similarity=%.2f\n", similarity );
+	free(bScore);
+	free(aScore);
+	aScore = NULL;
+	bScore = NULL;
+	semanticsDescriptors = NULL;
+	
+	return similarity;
+}
+
+double distance(double* trajA, int N, double* trajB, int M) {
+	double* aScore = (double*)malloc( N*sizeof(double));
+	double* bScore = (double*)malloc( N*M*sizeof(double));
+	double* semanticsDescriptors = (double*)malloc( 2*2*sizeof(double));
+	//GEO
+	semanticsDescriptors[0] = 0.0;
+	semanticsDescriptors[1] = 0.5;
+	//TIME
+	semanticsDescriptors[2] = 0.0;
+	semanticsDescriptors[3] = 0.5;
+
+	double *d_trajA,*d_trajB, *d_aScore, *d_bScore, *d_semanticsDescriptors;
+	cudaMalloc( (void**) &d_trajA, 4*N*sizeof(double) );
+	cudaMalloc( (void**) &d_trajB, 4*M*sizeof(double) ); 
+
+	cudaMalloc( (void**) &d_semanticsDescriptors, 2*2*sizeof(double) );
+	cudaMalloc( (void**) &d_aScore, N*sizeof(double) );
+	cudaMalloc( (void**) &d_bScore, N*M*sizeof(double) );
+	cudaMemcpy( (void*) d_trajA, (void*) trajA, 4*N*sizeof(double), cudaMemcpyHostToDevice);
+	cudaMemcpy( (void*) d_trajB, (void*) trajB, 4*M*sizeof(double), cudaMemcpyHostToDevice); 
+	cudaMemcpy( (void*) d_semanticsDescriptors, (void*) semanticsDescriptors, 2*2*sizeof(double), cudaMemcpyHostToDevice); 
+	
+	int THREADS = 512;
+	int BLOCOS = (N/THREADS) + 1;
+	
+    struct timeval begin, end;
+    gettimeofday(&begin, NULL);
+    msm<<<BLOCOS, THREADS>>>( d_trajA, N, d_trajB, M, d_aScore, d_bScore, d_semanticsDescriptors );
+    gettimeofday(&end, NULL);
+    
+	cudaMemcpy( (void*) aScore, (void*) d_aScore, N*sizeof(double), cudaMemcpyDeviceToHost);
+	cudaMemcpy( (void*) bScore, (void*) d_bScore, N*M*sizeof(double), cudaMemcpyDeviceToHost);
+	
+	cudaFree(d_trajA); 
+	cudaFree(d_trajB); 
+	cudaFree(d_aScore);
+	cudaFree(d_bScore);
+	cudaFree(d_semanticsDescriptors); 
+    
+	double parityAB = 0.0;
+	for (int i = 0; i < N; i++) {
+		parityAB += aScore[i];
+	}
+
+	double parityBA = 0.0;
+	for (int i = 0; i < N; i++) {
+		double maxScore = 0.0;
+		for (int j = 0; j < M; j++) {
+			maxScore = MAX(maxScore, bScore[i * M + j]);
+		}
+		parityBA += maxScore;
+	}
+	double similarity = (parityAB + parityBA) / (N + M);
+	free(semanticsDescriptors);
+	//printf("similarity=%.2f\n", similarity );
+	free(bScore);
+	free(aScore);
+	aScore = NULL;
+	bScore = NULL;
+	semanticsDescriptors = NULL;
+	
+	return similarity;
+}
+
+void msm_sequential(double* trajA, int lengthA, double* trajB, int lengthB, double* aScore, double* bScore, double* semanticsDescriptors) {
+	
+	double geoThreshold = semanticsDescriptors[0];
+	double timeThreshold = semanticsDescriptors[2];
+
+	double geoWeight = semanticsDescriptors[1];
+	double timeWeight = semanticsDescriptors[3];
+	for(int i = 0; i < lengthA; i++) {
+		double latGeoA = trajA[i * 4];
+		double lonGeoA = trajA[i * 4 + 1];
+		double startTimeA = trajA[i * 4 + 2];
+		double endTimeA = trajA[i * 4 + 3];
+
+		double maxScore = 0.0;
+		for (int j = 0; j < lengthB; j++) {
+			double latGeoB = trajB[j * 4];
+			double lonGeoB = trajB[j * 4 + 1];
+			double startTimeB = trajB[j * 4 + 2];
+			double endTimeB = trajB[j * 4 + 3];
+			double timeScore = 0.0;
+			if(startTimeA < endTimeB && startTimeB < endTimeA ) {
+			    double overlap = MIN(endTimeA, endTimeB) - MAX(startTimeA, startTimeB);
+			    if(overlap > 0.0) {
+	    			double duration = MAX(endTimeA, endTimeB) - MIN(startTimeA, startTimeB);
+	    			double timeDistance = 1 - (overlap / duration);
+	    			timeScore = (timeDistance <= timeThreshold ? 1 : 0) * timeWeight;
+			    }
+			}
+			double geoB[] = {latGeoB, lonGeoB};
+			double geoA[] = {latGeoA, lonGeoA};
+			double geoScore = (euclidean_local(geoB, geoA) <= geoThreshold ? 1 : 0) * geoWeight;
+			double sumScore = timeScore + geoScore;
+			if(sumScore > maxScore) {
+			    maxScore = sumScore;
+			}
+		    bScore[i * lengthB + j] = sumScore;
+		}
+		aScore[i] = maxScore;
+	}
+}
+
 //extern "C"
 __global__ void msm(double* trajA, int lengthA, double* trajB, int lengthB, double* aScore, double* bScore, double* semanticsDescriptors)
 {
@@ -317,7 +442,6 @@ __global__ void msm(double* trajA, int lengthA, double* trajB, int lengthB, doub
 		bScore[i * lengthB + j] = sumScore;
 	}
 	aScore[i] = maxScore;
-	//printf("Thread %d, maxScore=%.2f, maxGeoScore=%.2f, maxTimeScore=%.2f\n", i, maxScore, maxGeoScore,maxTimeScore );
 }
 
 __device__ double euclidean(double *p1, double *p2)
@@ -330,4 +454,13 @@ __device__ double euclidean(double *p1, double *p2)
 
 	return sqrt(distXSquare + distYSquare);
 }
+double euclidean_local(double *p1, double *p2)
+{
+	double distX = abs(p1[0] - p2[0]);
+	double distXSquare = distX * distX;
 
+	double distY = abs(p1[1] - p2[1]);
+	double distYSquare = distY * distY;
+
+	return sqrt(distXSquare + distYSquare);
+}
