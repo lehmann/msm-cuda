@@ -14,15 +14,13 @@ import java.util.Map;
 public class SplitFile {
 
 	public static void main(String[] args) throws IOException {
-		List<String> lines = Files.readAllLines(Paths.get("C:/Users/André/workspace/dtw-cuda/src/main/resources/backup_patel_vehicles.csv"));
+		List<String> lines = Files.readAllLines(Paths.get("C:/Users/André/git/msm-cuda/msm-cuda/src/main/resources/backup_patel_hurricane.csv"));
 		Map<String, List<String>> allTrajectories = new HashMap<String, List<String>>();
 		for (String line : lines) {
 			String[] fields = line.split(";");
-			if(!fields[0].equals("\"tid\"")) {
-				String tid = fields[0];
-				tid = tid.substring(1, tid.length() - 2).trim();
-				String clazz = fields[1];
-				clazz = clazz.substring(1, clazz.length() - 2).trim();
+			if(!fields[0].equals("tid")) {
+				String tid = fields[0].trim();
+				String clazz = fields[1].trim();
 				if(!allTrajectories.containsKey(tid)) {
 					allTrajectories.put(tid, new ArrayList<String>());
 				}
@@ -34,7 +32,7 @@ public class SplitFile {
 			}
 		}
 		for (Map.Entry<String, List<String>> entry : allTrajectories.entrySet()) {
-			Path file = Files.createFile(Paths.get("C:/Users/André/workspace/dtw-cuda/src/main/resources/" + entry.getKey() + ".traj"));
+			Path file = Files.createFile(Paths.get("C:/Users/André/git/msm-cuda/msm-cuda/src/main/resources/hurricane/" + entry.getKey() + ".traj"));
 			FileWriter writer = new FileWriter(file.toFile());
 			for (Iterator iterator = entry.getValue().iterator(); iterator.hasNext();) {
 				String traj = (String) iterator.next();
